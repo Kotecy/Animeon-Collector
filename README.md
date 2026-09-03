@@ -1,43 +1,57 @@
-# Секретные достижения Animeon
+<p align="center">
+  <img src="https://i.ibb.co/N6tTm6X4/logo.png" width="160" alt="Animeon Desktop">
+</p>
 
-**Статус:** 13/18 выполнено
-**Обновлено:** 02.09.2026
-**Источник:** `GET /api/achievements` (filtered `hidden: true`)
+<h1 align="center">Animeon Desktop</h1>
 
----
+<p align="center">
+  Десктоп-клиент для <a href="https://animeon.cc">Animeon</a> на Electron:<br>
+  сайт во встроенных вкладках, мультипрофили, детектор аномалий и взаимная автоподписка.
+</p>
 
-## Выполненные (13/18)
+<p align="center">
+  <a href="https://github.com/Kotecy/Animeon-Desktop/releases"><img src="https://img.shields.io/badge/version-0.3.0-violet" alt="version"></a>
+  <img src="https://img.shields.io/badge/platform-Win%2011-blue" alt="platform">
+  <img src="https://img.shields.io/badge/license-MIT-green" alt="license">
+</p>
 
-| # | Код | Название | Описание | Порог | Прогресс |
-|---|-----|----------|----------|-------|----------|
-| 1 | `secret_2501` | 2501 | Кукловод был рождён в море информации. | 4 | 4 ✅ |
-| 2 | `secret_thousand_minus_seven` | 1000 − 7 | Что такое тысяча минус семь? | 143 | 143 ✅ |
-| 3 | `secret_iddqd` | IDDQD | Некоторые коды переживают свои игры. | 1 | 1 ✅ |
-| 4 | `secret_konami` | Код на память | Вверх, вверх, вниз, вниз… дальше ты помнишь. | 1 | 1 ✅ |
-| 5 | `secret_deep_night` | Три часа ночи | Семь раз оказаться на сайте ровно в те три минуты, когда там нет никого. | 7 | 1 ✅ |
-| 6 | `secret_rewatch` | Дежавю | Один и тот же тайтл целиком. Трижды. | 3 | 3 ✅ |
-| 7 | `secret_leet_minute` | 13:37 | Одна минута в сутках, которую помнят все. | 1 | 1 ✅ |
-| 8 | `secret_same_day_release` | Ровесник | Кто-то вышел в эфир в один день с тобой. | 1 | 1 ✅ |
-| 9 | `secret_nine_lives` | Девять жизней | У кота их девять. Ты нашёл все. | 9 | 9 ✅ |
-| 10 | `secret_not_found` | Не туда свернул | Иногда самое интересное — там, где ничего нет. | 1 | 1 ✅ |
-| 11 | `secret_round_xp` | Ноль в ноль | Ровно столько. Ни единицей больше. | 1 | 1 ✅ |
-| 12 | `secret_frame_24` | Двадцать четвёртый кадр | Моргнёшь — пропустишь. | 1 | 1 ✅ |
-| 13 | `secret_witness` | Свидетель патча | Мир моргнул. Ты это видел.(Быть на сайте во время патча) | 1 | 1 ✅ |
+## ✨ Возможности
 
----
+- 🗂️ **Вкладки сайта** — до 5 фоновых вкладок, закрепление, мьют, индикатор звука.
+- 👥 **Профили** — до 5 изолированных сессий, переключение на лету, перенос сессии при смене домена (v1–v4).
+- 📡 **Детектор аномалий** — замечает аномалию и зовёт тройным звуком, всплывающим окном.
+- 🤝 **Взаимная автоподписка** — подписывается в ответ на новых фолловеров.
+- 🏆 **Секреты** — каталог секретных достижений с прогрессом.
+- 🔄 **Обновления** — проверка новых версий через GitHub Releases из настроек.
 
-## Не получены (5/18)
+## 🖼️ Скриншоты
 
-| # | Код | Название | Как получить |
-|---|-----|----------|-------------|
-| 14 | `secret_midnight_start` | Полночная премьера | Начать просмотр аниме ровно в 00:00 МСК |
-| 15 | `secret_exchange` | Доработка | Купить том опыта в магазине |
-| 16 | `secret_quest_deadline` | Финишная прямая | Завершить квест ровно в 23:59 МСК |
-| 17 | `secret_binge_finish` | Тайминг | Досмотреть к релизу новой серии |
+| Главная | Полезные функции | Прогресс секреток | Настройки |
+|---|---|---|---|
+| <a href="https://i.ibb.co/WpjsNLSv/image.png"><img src="https://i.ibb.co/WpjsNLSv/image.png" width="200" alt="Главная"></a> | <a href="https://i.ibb.co/KpKc0fMG/image.png"><img src="https://i.ibb.co/KpKc0fMG/image.png" width="200" alt="Полезные функции"></a> | <a href="https://i.ibb.co/xS55PcYk/image.png"><img src="https://i.ibb.co/xS55PcYk/image.png" width="200" alt="Прогресс секреток"></a> | <a href="https://i.ibb.co/d0hTBs0x/image.png"><img src="https://i.ibb.co/d0hTBs0x/image.png" width="200" alt="Настройки"></a> |
 
----
+## 📦 Установка
 
-## Статистика
+1. Скачай `AnimeonDesktop.exe` из [Releases](https://github.com/Kotecy/Animeon-Desktop/releases).
+2. Запусти — установка не нужна (portable). Данные хранятся в `%LOCALAPPDATA%\AnimeonDesktop`.
 
-- **Выполнено:** 13/18 (72%)
-- **Осталось:** 5 секреток
+<details>
+<summary><b>Сборка из исходников</b></summary>
+
+```cmd
+npm install
+npm run build
+npx electron-builder --win portable --publish never
+```
+
+Готовый файл: `release\AnimeonDesktop.exe`.
+
+</details>
+
+## ⚠️ Дисклеймер
+
+Неофициальный клиент. Автоматизация действий аккаунта может нарушать правила AnimeOn — используешь на свой риск. Детектор аномалий страницу не трогает (только наблюдает и уведомляет).
+
+## 📄 Лицензия
+
+MIT — см. [LICENSE](https://github.com/Kotecy/Animeon-Desktop/blob/main/LICENSE).
