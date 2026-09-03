@@ -1,0 +1,39 @@
+# Dependencies (восстанавливаются через npm ci)
+node_modules/
+
+# Build outputs (пересобираются: tsc + vite + electron-builder)
+dist/
+release/
+
+# Логи
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Бэкапы и архивы — НЕ пушить (0.2.14.rar однажды раздул portable до 800 МБ)
+*.rar
+*.zip
+*.7z
+*.tar.gz
+*.bak
+*.orig
+*~
+
+# Env
+.env
+.env.*
+!.env.example
+
+# Системный мусор
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Редакторы
+.vscode/
+.idea/
+
+# Локальные кэши
+.cache/
+*.tsbuildinfo
