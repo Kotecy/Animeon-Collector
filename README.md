@@ -28,7 +28,7 @@
 
 | Главная | Полезные функции | Прогресс секреток | Настройки |
 |---|---|---|---|
-| <a href="https://ibb.co/G3NFfqgQ"><img src="https://i.ibb.co/WpjsNLSv/image.png" width="200" alt="Главная"></a> | <a href="https://ibb.co/ksmVHwRy"><img src="https://i.ibb.co/KpKc0fMG/image.png" width="200" alt="Полезные функции"></a> | <a href="https://ibb.co/d0KK13tT"><img src="https://i.ibb.co/xS55PcYk/image.png" width="200" alt="Прогресс секреток"></a> | <a href="https://ibb.co/5W70TXWw"><img src="https://i.ibb.co/d0hTBs0x/image.png" width="200" alt="Настройки"></a> |
+| <a href="https://i.ibb.co/WpjsNLSv/image.png"><img src="https://i.ibb.co/WpjsNLSv/image.png" width="200" alt="Главная"></a> | <a href="https://i.ibb.co/KpKc0fMG/image.png"><img src="https://i.ibb.co/KpKc0fMG/image.png" width="200" alt="Полезные функции"></a> | <a href="https://i.ibb.co/C500NX6c/image.png"><img src="https://i.ibb.co/C500NX6c/image.png" width="200" alt="Прогресс секреток"></a> | <a href="https://i.ibb.co/TBCfcDBd/image.png"><img src="https://i.ibb.co/TBCfcDBd/image.png" width="200" alt="Настройки"></a> |
 
 ## 📦 Установка
 
