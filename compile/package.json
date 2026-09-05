@@ -1,6 +1,6 @@
 {
   "name": "animeon-desktop",
-  "version": "0.3.0",
+  "version": "0.3.14",
   "description": "Animeon Desktop",
   "main": "dist/main/index.js",
   "type": "commonjs",
@@ -20,6 +20,7 @@
     "files": [
       "dist/**/*",
       "build/icon.png",
+      "src/source/scripts/**/*",
       "package.json"
     ],
     "publish": {

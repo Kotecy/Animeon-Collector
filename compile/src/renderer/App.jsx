@@ -44,10 +44,12 @@ export default function App() {
   const [events, setEvents] = useState([])
   const [limitWarn, setLimitWarn] = useState(false)
   const [followToast, setFollowToast] = useState(null)
+  const [siteNotice, setSiteNotice] = useState(null)
   const limitTimer = useRef(null)
   const followTimer = useRef(null)
   const followQueue = useRef([])
   const followToastRef = useRef(null)
+  const siteNoticeTimer = useRef(null)
   const pushEvent = (text) => setEvents(prev => [{ id: Date.now() + Math.random(), text, time: new Date().toLocaleTimeString() }, ...prev].slice(0, 10))
   // Очередь тостов подписки: по одному 6с; клик — пропуск к следующему.
   // В журнал — отдельная строка «Подписка: Ник» на каждый показ.
@@ -70,8 +72,6 @@ export default function App() {
   // по окну (иначе автоплей браузера его заблокирует).
   const [anomalyToast, setAnomalyToast] = useState(null)
   const anomalyTimer = useRef(null)
-  const [infoToast, setInfoToast] = useState(null)
-  const infoTimer = useRef(null)
   const soundBlockedRef = useRef(false)
   const playAnomalySound = async () => {
     for (let i = 0; i < 3; i++) {
@@ -88,20 +88,20 @@ export default function App() {
   }
 
   useEffect(() => {
-    window.api?.onTabsLimit?.(() => {
+    const unsubscribeTabsLimit = window.api?.onTabsLimit?.(() => {
       // Синглтон: пока пилюля висит — спам-вызовы игнорируются.
       if (limitTimer.current) return
       setLimitWarn(true)
       limitTimer.current = setTimeout(() => { setLimitWarn(false); limitTimer.current = null }, 2500)
     })
-    window.api?.onFollowbackDone?.((names) => {
+    const unsubscribeFollowbackDone = window.api?.onFollowbackDone?.((names) => {
       const list = Array.isArray(names) ? names.map(String).filter(Boolean).slice(0, 10) : []
       if (!list.length) return
       followQueue.current.push(...list)
       if (followQueue.current.length > 10) followQueue.current.splice(0, followQueue.current.length - 10)
       if (!followToastRef.current) pumpFollow()
     })
-    window.api?.onFollowbackTick?.((ts, summary) => {
+    const unsubscribeFollowbackTick = window.api?.onFollowbackTick?.((ts, summary) => {
       if (ts) setFbCheck(ts)
       if (summary && summary.ts > lastSummaryTs.current) {
         lastSummaryTs.current = summary.ts
@@ -122,13 +122,7 @@ export default function App() {
     }
     window.addEventListener('pointerdown', primeAnomalyAudio, { once: true })
     window.addEventListener('keydown', primeAnomalyAudio, { once: true })
-    window.api?.onAppNotice?.((text) => {
-      if (!text) return
-      setInfoToast({ text, key: Date.now() + Math.random() })
-      if (infoTimer.current) clearTimeout(infoTimer.current)
-      infoTimer.current = setTimeout(() => setInfoToast(null), 3500)
-    })
-    window.api?.onAnomalyDetected?.(async (info) => {
+    const unsubscribeAnomaly = window.api?.onAnomalyDetected?.(async (info) => {
       const time = new Date().toLocaleTimeString()
       pushEvent('Нашли аномалию')
       if (!info || info.toast !== false) {
@@ -153,12 +147,27 @@ export default function App() {
       if (Number(s?.followbackLastCheck)) setFbCheck(Number(s.followbackLastCheck))
       if (s?.followbackLastSummary) { setFbSummary(s.followbackLastSummary); lastSummaryTs.current = Number(s.followbackLastSummary.ts) || 0 }
     })
-    window.api?.onTabsUpdated?.((t, activeTabId) => {
+    const unsubscribeTabs = window.api?.onTabsUpdated?.((t, activeTabId) => {
       setTabs(t)
       setOrder(prev => prev.filter(id => t.find(x=>x.id===id)).concat(t.filter(x=>!prev.includes(x.id)).map(x=>x.id)))
       if (activeTabId) setActiveId(activeTabId)
     })
-    return () => { if (limitTimer.current) clearTimeout(limitTimer.current); if (followTimer.current) clearTimeout(followTimer.current); if (anomalyTimer.current) clearTimeout(anomalyTimer.current); if (infoTimer.current) clearTimeout(infoTimer.current) }
+    const unsubscribeNavigationBlocked = window.api?.onSiteNavigationBlocked?.(() => {
+      setSiteNotice('Введите корректный адрес Animeon: animeon.cc, animeon.co, v1.animeon.co или v2.animeon.co.')
+      if (siteNoticeTimer.current) clearTimeout(siteNoticeTimer.current)
+      siteNoticeTimer.current = setTimeout(() => setSiteNotice(null), 5000)
+    })
+    return () => {
+      for (const unsubscribe of [unsubscribeTabsLimit, unsubscribeFollowbackDone, unsubscribeFollowbackTick, unsubscribeAnomaly, unsubscribeTabs, unsubscribeNavigationBlocked]) {
+        if (typeof unsubscribe === 'function') unsubscribe()
+      }
+      window.removeEventListener('pointerdown', primeAnomalyAudio)
+      window.removeEventListener('keydown', primeAnomalyAudio)
+      if (limitTimer.current) clearTimeout(limitTimer.current)
+      if (followTimer.current) clearTimeout(followTimer.current)
+      if (anomalyTimer.current) clearTimeout(anomalyTimer.current)
+      if (siteNoticeTimer.current) clearTimeout(siteNoticeTimer.current)
+    }
   }, [])
 
   const switchSiteTab = (id) => {
@@ -250,11 +259,8 @@ export default function App() {
           </span>
         </div>
       )}
-      {infoToast && (
-        <div key={infoToast.key} onClick={() => { if (infoTimer.current) clearTimeout(infoTimer.current); setInfoToast(null) }} className="pointer-events-auto flex cursor-pointer items-center gap-2 rounded-[10px] border border-violet-400/25 bg-[#0f101a]/80 px-3.5 py-2 text-xs font-medium text-zinc-200 shadow-[0_12px_32px_rgba(0,0,0,.45)] backdrop-blur-md">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="m4.5 12.5 5 5 10-11" /></svg>
-          <span>{infoToast.text}</span>
-        </div>
+      {siteNotice && (
+        <div className="rounded-xl border border-amber-300/30 bg-[#1a1710]/95 px-4 py-2.5 text-xs text-amber-100 shadow-[0_10px_30px_rgba(0,0,0,.5)]">{siteNotice}</div>
       )}
       {anomalyToast && !isSite && (
         <div key={anomalyToast.key} onClick={() => { if (anomalyTimer.current) clearTimeout(anomalyTimer.current); setAnomalyToast(null) }} className="pointer-events-auto flex cursor-pointer items-center gap-2.5 rounded-xl border border-emerald-400/50 bg-[#101814]/95 py-2.5 pl-3 pr-4 text-xs text-zinc-200 shadow-[0_10px_30px_rgba(0,0,0,.5)]">

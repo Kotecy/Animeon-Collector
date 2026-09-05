@@ -1,4 +1,4 @@
-import { app, BrowserWindow, BrowserView, ipcMain, session, shell } from 'electron'
+import { app, BrowserWindow, BrowserView, ipcMain, powerMonitor, session, shell } from 'electron'
 import path from 'path'
 import fs from 'fs'
 import Store from 'electron-store'
@@ -102,14 +102,70 @@ function setTabAudible(tabId: string, audible: boolean) {
 }
 
 let lastLimitInject = 0
+const ALLOWED_ANIMEON_HOSTS = new Set(['animeon.cc', 'animeon.co', 'v1.animeon.co', 'v2.animeon.co'])
+
+function normalizeAnimeonUrl(raw: unknown): string | null {
+  const value = String(raw || '').trim()
+  if (!value) return null
+  const candidate = /^https?:\/\//i.test(value) ? value : `https://${value}`
+  try {
+    const parsed = new URL(candidate)
+    if (
+      parsed.protocol !== 'https:' ||
+      !ALLOWED_ANIMEON_HOSTS.has(parsed.hostname.toLowerCase()) ||
+      parsed.username ||
+      parsed.password ||
+      parsed.port
+    ) return null
+    return parsed.toString()
+  } catch { return null }
+}
+
+// Базовый адрес — это только окружение сайта. В отличие от адреса вкладки,
+// для него не нужен путь `/`: origin даёт единый формат для v1 и v2.
+function normalizeAnimeonBaseUrl(raw: unknown): string | null {
+  const safeUrl = normalizeAnimeonUrl(raw)
+  if (!safeUrl) return null
+  try { return new URL(safeUrl).origin } catch { return null }
+}
+
+// Старые версии сохраняли v2 как `https://v2.animeon.co/`. Мигрируем это
+// значение сразу, иначе select в настройках не может сопоставить его с option.
+const normalizedStoredBaseUrl = normalizeAnimeonBaseUrl(store.get('baseUrl')) || 'https://v2.animeon.co'
+if (store.get('baseUrl') !== normalizedStoredBaseUrl) store.set('baseUrl', normalizedStoredBaseUrl)
+
 function getActiveViewForToast(): any | null {
   try {
     const v = activeTabId ? views.get(activeTabId) : null
     if (!v || (v.webContents as any)?.isDestroyed?.()) return null
-    if (!String(v.webContents.getURL() || '').includes('animeon')) return null
+    if (!normalizeAnimeonUrl(v.webContents.getURL())) return null
     return v
   } catch { return null }
 }
+
+function reloadActiveTab() {
+  const view = getActiveViewForToast()
+  if (!view) return { ok: false, error: 'Нет открытой вкладки Animeon' }
+  try { view.webContents.reload(); return { ok: true } } catch { return { ok: false, error: 'Не удалось перезагрузить вкладку' } }
+}
+
+function toggleDevTools() {
+  const contents = getActiveViewForToast()?.webContents || mainWindow?.webContents
+  if (!contents) return false
+  try {
+    if (contents.isDevToolsOpened()) contents.closeDevTools()
+    else contents.openDevTools({ mode: 'detach' })
+    return true
+  } catch { return false }
+}
+
+function handleBrowserShortcut(input: any) {
+  if (input.type !== 'keyDown') return false
+  if (input.key === 'F5') { reloadActiveTab(); return true }
+  if (input.key === 'F12') { toggleDevTools(); return true }
+  return false
+}
+
 function notifyTabLimit() {
   debugLog('DIAG tabs limit reached, notifying renderer')
   try { store.set('lastTabLimitWarn', Date.now()) } catch {}
@@ -127,10 +183,11 @@ function createTabFromUrl(url: string) {
   const tabs: any[] = (store.get('tabs') as any[]) || []
   debugLog('DIAG createTabFromUrl count=', tabs.length)
   if (tabs.length >= 5) { notifyTabLimit(); return null }
+  const safeUrl = normalizeAnimeonUrl(url) || String(store.get('baseUrl') || 'https://v2.animeon.co')
   const id = Date.now().toString()
   const activeAcc = store.get('activeAccountId') as string | null
   const partition = activeAcc ? `persist:animeon-acc-${activeAcc}` : 'persist:animeon-acc-1'
-  const tab = { id, url, title: 'Новая вкладка', partition, pinned: false, muted: false, audible: false }
+  const tab = { id, url: safeUrl, title: 'Новая вкладка', partition, pinned: false, muted: false, audible: false }
   tabs.push(tab); store.set('tabs', tabs)
   const order: string[] = (store.get('tabOrder') as string[]) || []; order.push(id); store.set('tabOrder', order)
   ensureView(tab); layoutViews()
@@ -141,6 +198,7 @@ function createTabFromUrl(url: string) {
 function destroyView(tabId: string) {
   const old = views.get(tabId)
   if (old && mainWindow) {
+    stopUtilitiesForTab(tabId)
     try { mainWindow.removeBrowserView(old); (old.webContents as any).destroy() } catch {}
     views.delete(tabId)
   }
@@ -234,6 +292,116 @@ let lastOAuthWindowTime = 0
 let isHtmlFullscreen = false
 const popupContents = new Set<number>()
 
+type UtilityId = 'xp-checker' | 'nya-logger'
+type UtilityState = { id: UtilityId; tabId: string; startedAt: number; accountId: string }
+const utilityStates = new Map<string, UtilityState>()
+const enabledUtilities = new Set<UtilityId>()
+const UTILITY_FILES: Record<UtilityId | 'morse-decoder', string> = {
+  'xp-checker': 'XP_Check.txt',
+  'nya-logger': 'NyaLogger by Suchka322.txt',
+  'morse-decoder': 'Morse_Decoder.txt'
+}
+
+function notifyUtilities() {
+  mainWindow?.webContents.send('utilities:updated', [...utilityStates.values()])
+}
+
+function utilityKey(id: UtilityId, tabId: string) { return `${id}:${tabId}` }
+
+function getUtilitySource(id: UtilityId | 'morse-decoder') {
+  // Скрипты лежат в src/source/scripts: в dev это <root>/src/source/scripts,
+  // в сборке files[] сохраняет относительный путь — тот же адрес в asar.
+  const scriptPath = path.join(app.getAppPath(), 'src', 'source', 'scripts', UTILITY_FILES[id])
+  return fs.readFileSync(scriptPath, 'utf8')
+}
+
+function getUtilityView() {
+  const id = activeTabId || (store.get('tabOrder') as string[])?.[0]
+  const view = id ? views.get(id) : null
+  if (!id || !view || view.webContents.isDestroyed() || !normalizeAnimeonUrl(view.webContents.getURL())) return null
+  return { id, view }
+}
+
+async function stopUtilityInTab(id: UtilityId, tabId: string) {
+  const active = utilityStates.get(utilityKey(id, tabId))
+  if (!active) return
+  const view = views.get(tabId)
+  const stopExpression = id === 'xp-checker'
+    ? 'window.__ANIMEON_XP_MONITOR__?.stop?.()'
+    : 'window.__NYA_LOGGER__?.stop?.()'
+  try { await view?.webContents.executeJavaScript(stopExpression, true) } catch {}
+  utilityStates.delete(utilityKey(id, tabId))
+}
+
+async function stopUtility(id: UtilityId) {
+  enabledUtilities.delete(id)
+  const running = [...utilityStates.values()].filter(state => state.id === id)
+  await Promise.all(running.map(state => stopUtilityInTab(id, state.tabId)))
+  notifyUtilities()
+  return { ok: true, active: false }
+}
+
+async function getActiveNickname(view: BrowserView) {
+  const accountId = String((view as any).__accountId || store.get('activeAccountId') || '1')
+  await syncAccountNickname(view, accountId)
+  const account = normalizeAccounts().find(a => String(a.id) === accountId)
+  return { accountId, nickname: String(account?.nickname || '').trim() }
+}
+
+async function startUtilityInTab(id: UtilityId, tabId: string, view: BrowserView) {
+  if (utilityStates.has(utilityKey(id, tabId))) return true
+  try {
+    let source = getUtilitySource(id)
+    let accountId = String((view as any).__accountId || store.get('activeAccountId') || '1')
+    if (id === 'xp-checker') {
+      const profile = await getActiveNickname(view)
+      accountId = profile.accountId
+      if (!profile.nickname) return false
+      source = source.replace("const TARGET_USER = 'username';", `const TARGET_USER = ${JSON.stringify(profile.nickname)};`)
+    }
+    await view.webContents.executeJavaScript(source, true)
+    utilityStates.set(utilityKey(id, tabId), { id, tabId, accountId, startedAt: Date.now() })
+    return true
+  } catch (error: any) {
+    debugLog(`utility ${id} start failed in tab ${tabId}:`, String(error?.message || error))
+    return false
+  }
+}
+
+async function startUtility(id: UtilityId) {
+  enabledUtilities.add(id)
+  const tabs: any[] = (store.get('tabs') as any[]) || []
+  if (!tabs.length) return { ok: false, error: 'Откройте вкладку Animeon для запуска инструмента' }
+  for (const tab of tabs) ensureView(tab)
+  const started = await Promise.all(tabs.map(async tab => {
+    const view = views.get(tab.id)
+    return view && normalizeAnimeonUrl(view.webContents.getURL()) ? startUtilityInTab(id, tab.id, view) : false
+  }))
+  notifyUtilities()
+  if (!started.some(Boolean)) {
+    const account = normalizeAccounts().find(a => String(a.id) === String(store.get('activeAccountId') || '1'))
+    if (id === 'xp-checker' && !account?.nickname) return { ok: false, error: 'Войдите в Animeon: ник активного профиля ещё не определён' }
+  }
+  return { ok: true, active: true, tabs: started.filter(Boolean).length }
+}
+
+async function applyEnabledUtilitiesToView(tabId: string, view: BrowserView) {
+  if (!normalizeAnimeonUrl(view.webContents.getURL())) return
+  for (const id of enabledUtilities) await startUtilityInTab(id, tabId, view)
+  notifyUtilities()
+}
+
+function clearUtilityStatesForTab(tabId: string) {
+  for (const [key, state] of utilityStates) {
+    if (state.tabId === tabId) utilityStates.delete(key)
+  }
+}
+
+function stopUtilitiesForTab(tabId: string) {
+  clearUtilityStatesForTab(tabId)
+  notifyUtilities()
+}
+
 function getPreloadPath(name: string) {
   return path.join(__dirname, '..', 'preload', name)
 }
@@ -270,7 +438,7 @@ async function completeGoogleAuthViaTab(idToken: string) {
     const view = id ? views.get(id) : null
     if (!view) return
     const url = view.webContents.getURL()
-    if (!url.includes('animeon')) { await view.webContents.loadURL(url.startsWith('http') ? url : 'https://v2.animeon.co/') }
+    if (!normalizeAnimeonUrl(url)) { await view.webContents.loadURL('https://v2.animeon.co/') }
     const ok = await view.webContents.executeJavaScript(
       `(async()=>{try{const r=await fetch('/api/auth/google',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify({id_token:${JSON.stringify(idToken)}})});if(!r.ok)return 'HTTP '+r.status;const j=await r.json().catch(()=>({}));return 'OK '+(j&&j.access_token?'token':'no-token')}catch(e){return 'ERR '+e.message}})()`,
       true
@@ -350,6 +518,9 @@ function ensureView(tab: any) {
       }
     })
     views.set(tab.id, view)
+    // Вкладки продолжают выполнять таймеры и fetch, когда окно свёрнуто
+    // или BrowserView временно вынесен за пределы окна.
+    try { view.webContents.setBackgroundThrottling(false) } catch {}
     view.webContents.on('media-started-playing', () => setTabAudible(tab.id, true))
     ;(view.webContents as any).on('media-paused-playing', () => setTabAudible(tab.id, false))
     view.webContents.on('render-process-gone', (_e, details) => {
@@ -357,6 +528,21 @@ function ensureView(tab: any) {
     })
     ;(view as any).__accountId = String((tab.partition || '').match(/animeon-acc-(\d+)/)?.[1] || '1')
     mainWindow.addBrowserView(view)
+    view.webContents.on('before-input-event', (event, input) => {
+      if (handleBrowserShortcut(input)) event.preventDefault()
+    })
+    view.webContents.on('will-navigate', (event, url) => {
+      if (!normalizeAnimeonUrl(url)) {
+        event.preventDefault()
+        mainWindow?.webContents.send('site:navigationBlocked')
+      }
+    })
+    view.webContents.on('will-redirect', (event, url) => {
+      if (!normalizeAnimeonUrl(url)) {
+        event.preventDefault()
+        mainWindow?.webContents.send('site:navigationBlocked')
+      }
+    })
     view.webContents.loadURL(tab.url)
 
     view.webContents.on('page-title-updated', (_e, title) => {
@@ -386,9 +572,21 @@ function ensureView(tab: any) {
         if (t && t.url !== url) { t.url = url; store.set('tabs', tabs) }
       } catch {}
     })
+    view.webContents.on('did-start-navigation', (_e, _url, isInPlace, isMainFrame) => {
+      // SPA-переходы (история/хеш) и навигации фреймов документ не
+      // пересоздают: инжектированные скрипты живы, состояние не трогаем.
+      // Иначе тумблер гаснет при каждом клике по сайту, хотя инструмент
+      // продолжает работать.
+      if (isInPlace || !isMainFrame) return
+      // После перезагрузки page world очищается: убираем устаревшее состояние,
+      // а did-finish-load подключит включённые инструменты заново.
+      clearUtilityStatesForTab(tab.id)
+      notifyUtilities()
+    })
     view.webContents.on('did-finish-load', () => {
       injectPlugin(view!)
       injectNoScrollbarCSS(view!)
+      void applyEnabledUtilitiesToView(tab.id, view!)
       // Pick up the nickname on our own after every page load (login, OAuth
       // reload, SPA navigation) instead of relying only on the Settings poll.
       // Delayed slightly so the site can hydrate client-side state first.
@@ -397,7 +595,7 @@ function ensureView(tab: any) {
         try {
           if ((view! as any).__accountId !== accountId) return
           if (view!.webContents.isDestroyed()) return
-          if (!view!.webContents.getURL().includes('animeon')) return
+          if (!normalizeAnimeonUrl(view!.webContents.getURL())) return
           syncAccountNickname(view!, String(accountId || '1'))
         } catch {}
       }, 2500)
@@ -449,8 +647,8 @@ function attachActiveTab() {
 
 function createMainWindow() {
   mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 800,
+    width: 1522,
+    height: 884,
     minWidth: 1024,
     minHeight: 600,
     frame: false,
@@ -464,6 +662,11 @@ function createMainWindow() {
       contextIsolation: true,
       nodeIntegration: false
     }
+  })
+  mainWindow.setMenuBarVisibility(false)
+  mainWindow.removeMenu()
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (handleBrowserShortcut(input)) event.preventDefault()
   })
 
   const devUrl = 'http://localhost:5173'
@@ -480,6 +683,9 @@ function createMainWindow() {
     attachActiveTab()
     layoutViews()
   })
+  // Renderer тоже остаётся живым при сворачивании: он получает статусы
+  // инструментов и уведомления, пока фоновые вкладки продолжают наблюдение.
+  try { mainWindow.webContents.setBackgroundThrottling(false) } catch {}
 
   // Diagnostics for "window disappears" reports: transparent window turns
   // invisible when its renderer dies, while the taskbar entry stays.
@@ -489,7 +695,12 @@ function createMainWindow() {
   mainWindow.on('unresponsive', () => debugLog('DIAG main window unresponsive'))
   mainWindow.on('responsive', () => debugLog('DIAG main window responsive again'))
   mainWindow.on('hide', () => debugLog('DIAG main window hide'))
-  mainWindow.on('minimize', () => debugLog('DIAG main window minimize'))
+  mainWindow.on('minimize', () => {
+    debugLog('DIAG main window minimize')
+    for (const [, view] of views) {
+      try { view.webContents.setBackgroundThrottling(false) } catch {}
+    }
+  })
   mainWindow.on('close', () => debugLog('DIAG main window close'))
 
   mainWindow.on('resize', layoutViews)
@@ -515,7 +726,7 @@ function createMainWindow() {
     // current user and persist the nickname alongside the account id.
     for (const account of accounts) {
       const view = [...views.values()].find(v => {
-        try { return v.webContents.getURL().includes('animeon') && (v as any).__accountId === account.id } catch { return false }
+        try { return !!normalizeAnimeonUrl(v.webContents.getURL()) && (v as any).__accountId === account.id } catch { return false }
       })
       if (!view) continue
       try {
@@ -611,7 +822,7 @@ function createMainWindow() {
     const existing = ((store.get('tabs') as any[]) || []).find(t => t.id === id)
     if (existing?.pinned) return false
     const view = views.get(id)
-    if (view && mainWindow) { mainWindow.removeBrowserView(view); (view.webContents as any).destroy(); views.delete(id) }
+    if (view && mainWindow) { stopUtilitiesForTab(id); mainWindow.removeBrowserView(view); (view.webContents as any).destroy(); views.delete(id) }
     let tabs: any[] = (store.get('tabs') as any[]) || []; tabs = tabs.filter((t) => t.id !== id); store.set('tabs', tabs)
     let order: string[] = (store.get('tabOrder') as string[]) || []; order = order.filter((o) => o !== id); store.set('tabOrder', order)
     if (activeTabId === id) { activeTabId = order[0] || tabs[0]?.id || null; store.set('activeTabId', activeTabId); layoutViews() }
@@ -648,12 +859,14 @@ function createMainWindow() {
     layoutViews(); return true
   })
   ipcMain.handle('tabs:navigate', (_e, id: string, url: string) => {
+    const safeUrl = normalizeAnimeonUrl(url)
+    if (!safeUrl) return { ok: false, error: 'Введите корректный адрес Animeon: animeon.cc, animeon.co, v1.animeon.co или v2.animeon.co.' }
     try {
       const tabs: any[] = (store.get('tabs') as any[]) || []
       const tab = tabs.find(t => t.id === id)
-      if (tab) { ensureView(tab); tab.url = url; store.set('tabs', tabs) }
+      if (tab) { ensureView(tab); tab.url = safeUrl; store.set('tabs', tabs) }
     } catch {}
-    const v = views.get(id); if (v) v.webContents.loadURL(url); return true
+    const v = views.get(id); if (v) v.webContents.loadURL(safeUrl); return { ok: true, url: safeUrl }
   })
   // Domain switch from Settings: rewrite tab URLs to the new host and reload
   // all views there, same as profile switching recreates sessions.
@@ -682,10 +895,10 @@ function createMainWindow() {
     } catch {}
   }
   ipcMain.handle('site:setBaseUrl', async (_e, url: string) => {
-    const base = String(url || '')
+    const base = normalizeAnimeonBaseUrl(url)
+    if (!base) return false
     let host = ''
     try { host = new URL(base).host } catch { return false }
-    if (!host.includes('animeon')) return false
     const prev = String(store.get('baseUrl') || '')
     let prevHost = ''
     try { prevHost = new URL(prev).host } catch {}
@@ -694,7 +907,7 @@ function createMainWindow() {
     const tabs: any[] = (store.get('tabs') as any[]) || []
     for (const tab of tabs) {
       try {
-        if (typeof tab.url === 'string' && (tab.url as string).includes('animeon')) {
+        if (typeof tab.url === 'string' && normalizeAnimeonUrl(tab.url)) {
           const u = new URL(tab.url as string)
           u.host = host
           tab.url = u.toString()
@@ -724,6 +937,8 @@ function createMainWindow() {
   })
   ipcMain.handle('sidebar:setCollapsed', (_e, v: boolean) => { store.set('sidebarCollapsed', v); layoutViews(); return true })
   ipcMain.handle('app:version', () => app.getVersion())
+  ipcMain.handle('tabs:reloadActive', () => reloadActiveTab())
+  ipcMain.handle('app:toggleDevTools', () => toggleDevTools())
   ipcMain.handle('app:checkUpdate', async () => {
     const current = app.getVersion()
     try {
@@ -746,11 +961,6 @@ function createMainWindow() {
     if (!/^https:\/\/github\.com\/Kotecy\/Animeon-Desktop\/releases/.test(u)) return false
     try { shell.openExternal(u); return true } catch { return false }
   })
-  // Короткое уведомление-пилюля уровня приложения (напр. «последняя версия»).
-  ipcMain.handle('app:notify', (_e, text: unknown) => {
-    mainWindow?.webContents.send('app:notice', String(text ?? '').slice(0, 120))
-    return true
-  })
   // Open the site's own login page in the active embedded tab.  The renderer
   // exposes this API for a native login button, so keep the navigation in the
   // same persistent partition as the selected account.
@@ -759,7 +969,7 @@ function createMainWindow() {
     const view = id ? views.get(id) : null
     if (!view) return { ok: false, error: 'Нет вкладки Animeon' }
     const current = view.webContents.getURL()
-    const target = current.includes('animeon') ? current : (store.get('baseUrl') as string)
+    const target = normalizeAnimeonUrl(current) ? current : (store.get('baseUrl') as string)
     try {
       await view.webContents.executeJavaScript(`(()=>{const b=[...document.querySelectorAll('button,a')].find(x=>/google|войти|вход|login/i.test((x.innerText||'')+' '+(x.getAttribute('aria-label')||'')));if(b){b.click();return true}return false})()`, true)
       return { ok: true }
@@ -771,7 +981,7 @@ function createMainWindow() {
     const id = activeTabId || (store.get('tabOrder') as string[])?.[0]
     const view = id ? views.get(id) : null
     const target = view || [...views.values()].find(v => {
-      try { return v.webContents.getURL().includes('animeon') } catch { return false }
+      try { return !!normalizeAnimeonUrl(v.webContents.getURL()) } catch { return false }
     })
     if (!target) return { ok: false, error: 'Нет вкладки Animeon' }
     try {
@@ -781,6 +991,26 @@ function createMainWindow() {
       if ((data as any)?.__error) return { ok: false, error: (data as any).__error }
       return { ok: true, data }
     } catch (e) { return { ok: false, error: String(e) } }
+  })
+  ipcMain.handle('utilities:list', () => [...utilityStates.values()])
+  ipcMain.handle('utilities:toggle', async (_e, rawId: UtilityId) => {
+    const id = rawId === 'xp-checker' || rawId === 'nya-logger' ? rawId : null
+    if (!id) return { ok: false, error: 'Неизвестный инструмент' }
+    if ([...utilityStates.values()].some(state => state.id === id)) return stopUtility(id)
+    return startUtility(id)
+  })
+  ipcMain.handle('utilities:runMorse', async () => {
+    const target = getUtilityView()
+    if (!target) return { ok: false, error: 'Откройте вкладку Animeon для запуска декодера' }
+    let pathname = ''
+    try { pathname = new URL(target.view.webContents.getURL()).pathname } catch {}
+    if (pathname !== '/2501') return { ok: false, error: 'Декодер Морзе доступен только на странице Animeon /2501.' }
+    try {
+      const result = await target.view.webContents.executeJavaScript(getUtilitySource('morse-decoder'), true)
+      return result && result.ok ? result : { ok: false, error: result?.error || 'Не удалось получить код Морзе' }
+    } catch (error: any) {
+      return { ok: false, error: String(error?.message || error) }
+    }
   })
   ipcMain.handle('detector:toggle', () => {
     const d: any = (store as any).get('detector') || { watching: false, sound: true, count: 0, lastAt: 0 }
@@ -897,12 +1127,22 @@ if (!singleInstanceLock) {
   })
 
   app.whenReady().then(() => {
+    // После системного сна Chromium возобновляет таймеры не одновременно.
+    // Просим каждый живой view немедленно перепроверить аномалию, не создавая
+    // новый цикл polling и не перезагружая страницу пользователя.
+    powerMonitor.on('resume', () => {
+      debugLog('system resumed: refreshing detector views')
+      for (const [, view] of views) {
+        try { view.webContents.executeJavaScript('window.__animeonDetector?.wake?.()', true).catch(() => {}) } catch {}
+      }
+      mainWindow?.webContents.send('system:resumed', Date.now())
+    })
     // Pinned tabs survive relaunches; a fresh home tab only when nothing pinned.
     const savedTabs: any[] = (store.get('tabs') as any[]) || []
     const pinnedTabs = savedTabs.filter(t => t.pinned).slice(0, 5).map(t => ({ ...t, audible: false }))
     const startupAccount = String(store.get('activeAccountId') || '1')
     const tabsAtLaunch = pinnedTabs.length ? pinnedTabs : [
-      { id: `startup-${Date.now()}`, url: store.get('baseUrl') as string, title: 'AnimeOn — старт', partition: `persist:animeon-acc-${startupAccount}`, pinned: false, muted: false },
+      { id: `startup-${Date.now()}`, url: store.get('baseUrl') as string, title: 'Animeon — старт', partition: `persist:animeon-acc-${startupAccount}`, pinned: false, muted: false },
     ]
     const launchId = tabsAtLaunch[0]?.id
     store.set('tabs', tabsAtLaunch)
@@ -1103,7 +1343,7 @@ if (!singleInstanceLock) {
         // as a real popup so window.opener points back to the animeon tab.
         // GIS opens /o/oauth2/v2/auth and then /gsi/select as two popups of
         // the SAME flow — allow both (no global cooldown that drops the 2nd).
-        if (isOAuth(url) && currentUrl.includes('animeon')) {
+        if (isOAuth(url) && !!normalizeAnimeonUrl(currentUrl)) {
           openOAuthWindow(url).catch(() => {})
           return { action: 'deny' }
         }
@@ -1113,7 +1353,7 @@ if (!singleInstanceLock) {
           openOAuthWindow(url).catch(() => {})
           return { action: 'deny' }
         }
-        if (url.startsWith('http') && url.includes('animeon')) {
+        if (url.startsWith('http') && !!normalizeAnimeonUrl(url)) {
           const isTabView = [...views.values()].some(v => v.webContents === contents)
           debugLog('DIAG window-open animeon isTabView=', isTabView, String(url).split('?')[0])
           if (isTabView) {
@@ -1121,7 +1361,7 @@ if (!singleInstanceLock) {
             return { action: 'deny' }
           }
         }
-        if (url.startsWith('http') && !url.includes('animeon')) {
+        if (url.startsWith('http') && !normalizeAnimeonUrl(url)) {
           shell.openExternal(url)
           return { action: 'deny' }
         }
@@ -1144,7 +1384,7 @@ if (!singleInstanceLock) {
           ev.preventDefault()
           return
         }
-        if (!url.includes('animeon') && !url.startsWith('about:') && url.startsWith('http')) {
+        if (!normalizeAnimeonUrl(url) && !url.startsWith('about:') && url.startsWith('http')) {
           ev.preventDefault()
           shell.openExternal(url)
         }
@@ -1159,7 +1399,7 @@ if (!singleInstanceLock) {
         if (isGoogleOrTelegram(win.webContents.getURL())) return
         // Route an animeon callback opened in a stray window into the tab.
         win.webContents.on('did-start-navigation', (_ev, navUrl) => {
-          if (navUrl.includes('animeon')) {
+          if (normalizeAnimeonUrl(navUrl)) {
             const id = activeTabId || (store.get('tabOrder') as string[])?.[0]
             const v = id ? views.get(id) : null
             if (v) v.webContents.loadURL(navUrl)

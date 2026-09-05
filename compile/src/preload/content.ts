@@ -7,8 +7,10 @@
 (function () {
   if ((window as any).__acInjected) return
   ;(window as any).__acInjected = true
-  // Embedded AnimeOn must not be able to close the host tab.
-  if (location.hostname.includes('animeon')) {
+  const ANIMEON_HOSTS = new Set(['animeon.cc', 'animeon.co', 'v1.animeon.co', 'v2.animeon.co'])
+  const isAnimeon = ANIMEON_HOSTS.has(location.hostname.toLowerCase())
+  // Embedded Animeon must not be able to close the host tab.
+  if (isAnimeon) {
     try { window.close = (() => {}) as any } catch {}
   }
 
@@ -21,8 +23,6 @@
   async function storeSet(key: string, val: any): Promise<void> {
     try { await host()?.storeSet(key, val) } catch {}
   }
-
-  const isAnimeon = location.hostname.includes('animeon')
 
   /* ═══════════════ Детектор аномалий (только наблюдает) ═══════════════ */
   // Легальный помощник: НИКОГДА не кликает по странице. Видит кнопку
@@ -103,10 +103,18 @@
       handleAnomalyGone()
     } catch {}
   }
+  let detPollTimer: ReturnType<typeof setTimeout> | null = null
+  let detPollRunning = false
   function scheduleStatePoll(ms: number) {
-    setTimeout(() => { void pollAnomalyState() }, ms)
+    if (detPollTimer) clearTimeout(detPollTimer)
+    detPollTimer = setTimeout(() => {
+      detPollTimer = null
+      void pollAnomalyState()
+    }, ms)
   }
   async function pollAnomalyState(): Promise<void> {
+    if (detPollRunning) return
+    detPollRunning = true
     try {
       if (!(await isWatching())) { scheduleStatePoll(DETECT_STATE_IDLE_MS); return }
       let delay = DETECT_STATE_WAIT_MS
@@ -124,6 +132,7 @@
       } catch { delay = DETECT_STATE_ERROR_MS }
       scheduleStatePoll(delay)
     } catch { scheduleStatePoll(DETECT_STATE_ERROR_MS) }
+    finally { detPollRunning = false }
   }
   const detObserver = new MutationObserver(() => { void scanAnomalyDom() })
   detObserver.observe(document.documentElement, { childList: true, subtree: true })
@@ -131,6 +140,17 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => { void scanAnomalyDom() })
   else void scanAnomalyDom()
   scheduleStatePoll(2000)
+  // Main вызывает wake после пробуждения Windows. Таймер заменяется одним
+  // срочным polling-циклом, поэтому параллельные проверки не копятся.
+  try {
+    ;(window as any).__animeonDetector = {
+      wake: () => {
+        detWatchCache.at = 0
+        void scanAnomalyDom()
+        scheduleStatePoll(0)
+      }
+    }
+  } catch {}
   if (!isAnimeon) return
 
   /* ═══════════════ Меню профиля: скролл в низком окне ═══════════════ */
