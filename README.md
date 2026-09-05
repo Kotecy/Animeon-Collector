@@ -5,53 +5,74 @@
 <h1 align="center">Animeon Desktop</h1>
 
 <p align="center">
-  Десктоп-клиент для <a href="https://animeon.cc">Animeon</a> на Electron:<br>
-  сайт во встроенных вкладках, мультипрофили, детектор аномалий и взаимная автоподписка.
+  Неофициальный Windows-клиент для <a href="https://animeon.cc">Animeon</a> со вкладками, отдельными профилями и встроенными помощниками.
 </p>
 
 <p align="center">
-  <a href="https://github.com/Kotecy/Animeon-Desktop/releases"><img src="https://img.shields.io/badge/version-0.3.0-violet" alt="version"></a>
-  <img src="https://img.shields.io/badge/platform-Win%2011-blue" alt="platform">
-  <img src="https://img.shields.io/badge/license-MIT-green" alt="license">
+  <a href="https://github.com/Kotecy/Animeon-Desktop/releases"><img src="https://img.shields.io/badge/version-0.3.14-violet" alt="version 0.3.14"></a>
+  <img src="https://img.shields.io/badge/platform-Windows%2011-blue" alt="Windows 11">
+  <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT license">
 </p>
 
-## ✨ Возможности
+## Возможности
 
-- 🗂️ **Вкладки сайта** — до 5 фоновых вкладок, закрепление, мьют, индикатор звука.
-- 👥 **Профили** — до 5 изолированных сессий, переключение на лету, перенос сессии при смене домена (v1–v4).
-- 📡 **Детектор аномалий** — замечает аномалию и зовёт тройным звуком, всплывающим окном.
-- 🤝 **Взаимная автоподписка** — подписывается в ответ на новых фолловеров.
-- 🏆 **Секреты** — каталог секретных достижений с прогрессом.
-- 🔄 **Обновления** — проверка новых версий через GitHub Releases из настроек.
+- До пяти вкладок Animeon с закреплением, отключением звука и прокруткой колесом мыши.
+- До пяти независимых профилей с отдельными авторизованными сессиями.
+- Детектор аномалий со звуком и уведомлением.
+- Взаимная автоподписка на новых подписчиков.
+- XP Monitor с автоматическим определением аккаунта, точными XP и уровнем.
+- Каталог секреток с синхронизацией, фильтрами и инструкциями по наведению на `?`.
+- Проверка новых версий через GitHub Releases.
 
-## 🖼️ Скриншоты
+## Временные инструменты
+- NyaLogger ищущий коды NYA-*** формата.
+- Декодер Морзе для задания на странице `/2501`.
+
+## Скриншоты
 
 | Главная | Полезные функции | Прогресс секреток | Настройки |
 |---|---|---|---|
 | <a href="https://i.ibb.co/WpjsNLSv/image.png"><img src="https://i.ibb.co/WpjsNLSv/image.png" width="200" alt="Главная"></a> | <a href="https://i.ibb.co/KpKc0fMG/image.png"><img src="https://i.ibb.co/KpKc0fMG/image.png" width="200" alt="Полезные функции"></a> | <a href="https://i.ibb.co/C500NX6c/image.png"><img src="https://i.ibb.co/C500NX6c/image.png" width="200" alt="Прогресс секреток"></a> | <a href="https://i.ibb.co/TBCfcDBd/image.png"><img src="https://i.ibb.co/TBCfcDBd/image.png" width="200" alt="Настройки"></a> |
 
-## 📦 Установка
+## Установка
 
-1. Скачай `AnimeonDesktop.exe` из [Releases](https://github.com/Kotecy/Animeon-Desktop/releases).
-2. Запусти — установка не нужна (portable). Данные хранятся в `%LOCALAPPDATA%\AnimeonDesktop`.
+1. Скачайте `AnimeonDesktop.exe` на странице [Releases](https://github.com/Kotecy/Animeon-Desktop/releases).
+2. Запустите файл — установка не требуется.
+
+Настройки и сессии сохраняются в `%LOCALAPPDATA%\AnimeonDesktop`.
+
+## Управление
+
+- Колесо мыши над вкладками — горизонтальная прокрутка списка.
+- Средняя кнопка мыши по вкладке — закрыть вкладку.
+- `F5` — перезагрузить открытую страницу.
+- `F12` — открыть или закрыть DevTools.
+- Адресная строка принимает только `animeon.cc`, `animeon.co`, `v1.animeon.co` и `v2.animeon.co`.
 
 <details>
 <summary><b>Сборка из исходников</b></summary>
 
-```cmd
-npm install
+Требуются Node.js 20+ и npm.
+
+```powershell
+npm ci
 npm run build
-npx electron-builder --win portable --publish never
 ```
 
-Готовый файл: `release\AnimeonDesktop.exe`.
+Portable-сборка появится в `release\AnimeonDesktop.exe`.
+
+Для запуска среды разработки:
+
+```powershell
+npm run dev
+```
 
 </details>
 
 ## ⚠️ Дисклеймер
 
-Неофициальный клиент. Автоматизация действий аккаунта может нарушать правила AnimeOn — используешь на свой риск. Детектор аномалий страницу не трогает (только наблюдает и уведомляет).
+Animeon Desktop — неофициальный клиент и не связан с администрацией Animeon. Функции, выполняющие действия от имени аккаунта, используйте с учётом правил сайта.
 
-## 📄 Лицензия
+## Лицензия
 
-MIT — см. [LICENSE](https://github.com/Kotecy/Animeon-Desktop/blob/main/LICENSE).
+Проект распространяется по лицензии MIT.
