@@ -1,0 +1,837 @@
+// ==UserScript==
+// @name         AnimeOn Exact XP Monitor
+// @namespace    animeon-xp-monitor
+// @version      1.3.0
+// @description  Точный XP AnimeOn через реальный API профиля
+// @match        https://animeon.cc/user/*
+// @grant        none
+// @run-at       document-idle
+// ==/UserScript==
+
+(() => {
+    'use strict';
+
+    if (window.__ANIMEON_XP_MONITOR__?.running) {
+        return { running: true };
+    }
+
+    const TARGET_USER = 'username';
+
+    const POLL_MS = 2000;
+    const STORAGE_KEY = 'animeon_xp_monitor_position_v3';
+    let cachedAccountLevel = null;
+    let lastLevelProbe = 0;
+
+    let lastXP = null;
+    let busy = false;
+
+    // ---------------------------------------------------------
+    // Определяем открытый профиль из:
+    // https://animeon.cc/user/user
+    // ---------------------------------------------------------
+
+    function getSlug() {
+        const m = location.pathname.match(/^\/user\/([^/?#]+)/i);
+
+        return m?.[1]
+            ? decodeURIComponent(m[1]).toLowerCase()
+            : String(TARGET_USER || '').trim().toLowerCase() || null;
+    }
+
+    // ---------------------------------------------------------
+    // UI
+    // ---------------------------------------------------------
+
+    const panel = document.createElement('div');
+
+    panel.id = 'animeon-xp-monitor';
+
+    panel.innerHTML = `
+        <div class="xpmon-header">
+            <div class="xpmon-title">
+                <span class="xpmon-dot"></span>
+                XP Monitor
+            </div>
+
+            <button class="xpmon-refresh" title="Обновить">
+                ↻
+            </button>
+        </div>
+
+        <div class="xpmon-body">
+
+            <div class="xpmon-row main">
+                <span class="label">XP</span>
+                <span class="xp-value">—</span>
+            </div>
+
+            <div class="xpmon-row">
+                <span class="label">Уровень</span>
+                <span class="level-value">—</span>
+            </div>
+
+            <div class="xpmon-row">
+                <span class="label">Изменение</span>
+                <span class="delta-value">—</span>
+            </div>
+
+            <div class="separator"></div>
+
+            <div class="status">Запуск…</div>
+            <div class="updated"></div>
+
+        </div>
+    `;
+
+    document.documentElement.appendChild(panel);
+
+    const xpEl =
+        panel.querySelector('.xp-value');
+
+    const levelEl =
+        panel.querySelector('.level-value');
+
+    const deltaEl =
+        panel.querySelector('.delta-value');
+
+    const statusEl =
+        panel.querySelector('.status');
+
+    const updatedEl =
+        panel.querySelector('.updated');
+
+    const dotEl =
+        panel.querySelector('.xpmon-dot');
+
+    const refreshButton =
+        panel.querySelector('.xpmon-refresh');
+
+    // ---------------------------------------------------------
+    // CSS
+    // ---------------------------------------------------------
+
+    const style = document.createElement('style');
+    style.id = 'animeon-xp-monitor-style';
+
+    style.textContent = `
+        #animeon-xp-monitor {
+            position: fixed;
+            top: 90px;
+            right: 20px;
+
+            width: 205px;
+
+            z-index: 2147483647;
+
+            color: #fff;
+
+            background:
+                linear-gradient(
+                    145deg,
+                    rgba(25,25,29,.97),
+                    rgba(10,10,13,.97)
+                );
+
+            border:
+                1px solid rgba(255,255,255,.12);
+
+            border-radius: 12px;
+
+            overflow: hidden;
+
+            box-shadow:
+                0 12px 35px rgba(0,0,0,.45),
+                inset 0 1px 0 rgba(255,255,255,.05);
+
+            backdrop-filter: blur(12px);
+
+            font-family:
+                Inter,
+                Arial,
+                sans-serif;
+
+            font-size: 12px;
+
+            user-select: none;
+        }
+
+        #animeon-xp-monitor .xpmon-header {
+            height: 36px;
+
+            padding: 0 7px 0 11px;
+
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+
+            cursor: move;
+
+            border-bottom:
+                1px solid rgba(255,255,255,.07);
+        }
+
+        #animeon-xp-monitor .xpmon-title {
+            display: flex;
+            align-items: center;
+
+            gap: 7px;
+
+            font-weight: 700;
+        }
+
+        #animeon-xp-monitor .xpmon-dot {
+            width: 7px;
+            height: 7px;
+
+            border-radius: 50%;
+
+            background: #777;
+        }
+
+        #animeon-xp-monitor .xpmon-dot.loading {
+            background: #e5aa42;
+
+            box-shadow:
+                0 0 8px rgba(229,170,66,.8);
+        }
+
+        #animeon-xp-monitor .xpmon-dot.online {
+            background: #43d17c;
+
+            box-shadow:
+                0 0 8px rgba(67,209,124,.8);
+        }
+
+        #animeon-xp-monitor .xpmon-dot.error {
+            background: #e84e5c;
+
+            box-shadow:
+                0 0 8px rgba(232,78,92,.8);
+        }
+
+        #animeon-xp-monitor .xpmon-refresh {
+            width: 27px;
+            height: 27px;
+
+            display: flex;
+            align-items: center;
+            justify-content: center;
+
+            border:
+                1px solid rgba(255,255,255,.15);
+
+            border-radius: 6px;
+
+            background:
+                rgba(255,255,255,.05);
+
+            color: #ddd;
+
+            cursor: pointer;
+
+            font-size: 16px;
+        }
+
+        #animeon-xp-monitor .xpmon-refresh:hover {
+            background:
+                rgba(255,255,255,.12);
+        }
+
+        #animeon-xp-monitor .xpmon-refresh.loading {
+            animation:
+                xpmon-spin .8s linear infinite;
+        }
+
+        @keyframes xpmon-spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        #animeon-xp-monitor .xpmon-body {
+            padding: 10px 11px;
+        }
+
+        #animeon-xp-monitor .xpmon-row {
+            min-height: 25px;
+
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+
+            gap: 10px;
+        }
+
+        #animeon-xp-monitor .label {
+            color: #929292;
+
+            font-size: 10px;
+        }
+
+        #animeon-xp-monitor .xp-value,
+        #animeon-xp-monitor .level-value,
+        #animeon-xp-monitor .delta-value {
+            font-family:
+                Consolas,
+                "Cascadia Mono",
+                monospace;
+
+            font-variant-numeric:
+                tabular-nums;
+        }
+
+        #animeon-xp-monitor .xp-value {
+            color: #d9c5ff;
+
+            font-size: 17px;
+            font-weight: 800;
+        }
+
+        #animeon-xp-monitor .level-value {
+            font-size: 13px;
+            font-weight: 700;
+        }
+
+        #animeon-xp-monitor .delta-value {
+            color: #aaa;
+        }
+
+        #animeon-xp-monitor .delta-value.positive {
+            color: #53dd8c;
+        }
+
+        #animeon-xp-monitor .delta-value.negative {
+            color: #ef6c76;
+        }
+
+        #animeon-xp-monitor .separator {
+            height: 1px;
+
+            margin: 6px 0;
+
+            background:
+                rgba(255,255,255,.07);
+        }
+
+        #animeon-xp-monitor .status {
+            color: #777;
+
+            font-size: 9px;
+
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        #animeon-xp-monitor .updated {
+            margin-top: 3px;
+
+            color: #555;
+
+            font-size: 9px;
+        }
+    `;
+
+    document.documentElement.appendChild(style);
+
+    // ---------------------------------------------------------
+    // Перетаскивание
+    // ---------------------------------------------------------
+
+    const header =
+        panel.querySelector('.xpmon-header');
+
+    let dragging = false;
+    let offsetX = 0;
+    let offsetY = 0;
+
+    header.addEventListener('mousedown', e => {
+
+        if (e.target.closest('button')) {
+            return;
+        }
+
+        dragging = true;
+
+        const r =
+            panel.getBoundingClientRect();
+
+        offsetX =
+            e.clientX - r.left;
+
+        offsetY =
+            e.clientY - r.top;
+
+        panel.style.right = 'auto';
+
+        e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', e => {
+
+        if (!dragging) {
+            return;
+        }
+
+        let x =
+            e.clientX - offsetX;
+
+        let y =
+            e.clientY - offsetY;
+
+        x = Math.max(
+            0,
+            Math.min(
+                window.innerWidth -
+                panel.offsetWidth,
+                x
+            )
+        );
+
+        y = Math.max(
+            0,
+            Math.min(
+                window.innerHeight -
+                panel.offsetHeight,
+                y
+            )
+        );
+
+        panel.style.left =
+            `${x}px`;
+
+        panel.style.top =
+            `${y}px`;
+    });
+
+    document.addEventListener('mouseup', () => {
+
+        if (!dragging) {
+            return;
+        }
+
+        dragging = false;
+
+        const r =
+            panel.getBoundingClientRect();
+
+        localStorage.setItem(
+            STORAGE_KEY,
+            JSON.stringify({
+                x: r.left,
+                y: r.top
+            })
+        );
+    });
+
+    // Восстановление позиции
+
+    try {
+        const pos =
+            JSON.parse(
+                localStorage.getItem(
+                    STORAGE_KEY
+                )
+            );
+
+        if (
+            pos &&
+            Number.isFinite(pos.x) &&
+            Number.isFinite(pos.y)
+        ) {
+            panel.style.right = 'auto';
+
+            panel.style.left =
+                `${pos.x}px`;
+
+            panel.style.top =
+                `${pos.y}px`;
+        }
+
+    } catch {}
+
+    // ---------------------------------------------------------
+    // Уровень доступен в меню аккаунта на каждой странице AnimeOn.
+    // ---------------------------------------------------------
+
+    function toFiniteNumber(value) {
+        if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+        if (typeof value !== 'string') return null;
+
+        const normalized = value
+            .replace(/\u00a0/g, ' ')
+            .replace(/\s+/g, '')
+            .replace(',', '.');
+        if (!normalized || !/^-?\d+(?:\.\d+)?$/.test(normalized)) return null;
+
+        const number = Number(normalized);
+        return Number.isFinite(number) ? number : null;
+    }
+
+    function readLevelFromPage() {
+        const menu = document.querySelector('[aria-label*="Меню аккаунта"], [aria-label*="уровень"]');
+        const menuText = `${menu?.getAttribute('aria-label') || ''} ${menu?.textContent || ''}`;
+        const menuMatch = menuText.match(/уровень\s*[:\-]?\s*([\d\s\u00a0.,]+)/i);
+        const menuLevel = toFiniteNumber(menuMatch?.[1]);
+        if (menuLevel !== null) return menuLevel;
+
+        // На странице /user/... это первое поле профиля. Берём только
+        // самостоятельную строку, чтобы не спутать уровень другого пользователя.
+        const pageMatch = String(document.body?.innerText || '').match(/(?:^|\n)\s*Уровень\s*[:\-]?\s*([\d\s\u00a0.,]+)\s*(?:\n|$)/i);
+        return toFiniteNumber(pageMatch?.[1]);
+    }
+
+    // API не во всех версиях сайта кладёт уровень в profile.level:
+    // он может лежать в stats/progress как строка или число. Ищем его в
+    // объекте уже найденного пользователя, не в ответе целиком, чтобы не
+    // спутать с уровнем аниме или достижения.
+    function readLevelFromProfile(profile) {
+        const keys = [
+            'level',
+            'current_level',
+            'user_level',
+            'experience_level',
+            'xp_level',
+            'lvl',
+            'userLevel',
+            'currentLevel',
+            'experienceLevel',
+            'xpLevel'
+        ];
+        const seen = new WeakSet();
+
+        function walk(value, depth = 0) {
+            if (!value || typeof value !== 'object' || depth > 5 || seen.has(value)) return null;
+            seen.add(value);
+
+            for (const key of keys) {
+                const number = toFiniteNumber(value[key]);
+                if (number !== null && number >= 0) return number;
+            }
+
+            for (const child of Object.values(value)) {
+                const found = walk(child, depth + 1);
+                if (found !== null) return found;
+            }
+            return null;
+        }
+
+        return walk(profile);
+    }
+
+    // /api/users/:slug отдает total_xp, но не обязан содержать уровень.
+    // Сам профиль текущей сессии на разных версиях AnimeOn лежит в одном из
+    // этих маршрутов; запрашиваем их редко, чтобы не нагружать сайт.
+    async function readLevelFromCurrentSession() {
+        if (cachedAccountLevel !== null) return cachedAccountLevel;
+        if (Date.now() - lastLevelProbe < 60_000) return null;
+        lastLevelProbe = Date.now();
+
+        const paths = ['/api/users/me', '/api/auth/me', '/api/user/profile', '/api/profile'];
+        for (const path of paths) {
+            try {
+                const response = await fetch(path, {
+                    credentials: 'include', cache: 'no-store',
+                    headers: { Accept: 'application/json' }
+                });
+                if (!response.ok) continue;
+                const level = readLevelFromProfile(await response.json());
+                if (level !== null) {
+                    cachedAccountLevel = level;
+                    return level;
+                }
+            } catch {}
+        }
+        return null;
+    }
+
+    // ---------------------------------------------------------
+    // Извлечение объекта пользователя из JSON
+    // ---------------------------------------------------------
+
+    function findProfileObject(data, slug) {
+
+        const seen =
+            new WeakSet();
+
+        let best = null;
+
+        function walk(v) {
+
+            if (
+                !v ||
+                typeof v !== 'object'
+            ) {
+                return;
+            }
+
+            if (seen.has(v)) {
+                return;
+            }
+
+            seen.add(v);
+
+            try {
+
+                if (
+                    Number.isFinite(v.total_xp) &&
+                    String(
+                        v.username_slug || ''
+                    ).toLowerCase() === slug
+                ) {
+                    best = v;
+
+                    return;
+                }
+
+            } catch {}
+
+            for (
+                const key of Object.keys(v)
+            ) {
+
+                if (best) {
+                    return;
+                }
+
+                try {
+                    walk(v[key]);
+                } catch {}
+            }
+        }
+
+        walk(data);
+
+        return best;
+    }
+
+    // ---------------------------------------------------------
+    // НАСТОЯЩИЙ API-запрос
+    // ---------------------------------------------------------
+
+    async function fetchProfile() {
+
+        const slug =
+            getSlug();
+
+        if (!slug) {
+            throw new Error(
+                'Не удалось определить профиль'
+            );
+        }
+
+        const response =
+            await fetch(
+                `/api/users/${encodeURIComponent(slug)}?t=${Date.now()}`,
+                {
+                    method: 'GET',
+
+                    credentials: 'include',
+
+                    cache: 'no-store',
+
+                    headers: {
+                        Accept:
+                            'application/json'
+                    }
+                }
+            );
+
+        if (!response.ok) {
+
+            throw new Error(
+                `API HTTP ${response.status}`
+            );
+        }
+
+        const data =
+            await response.json();
+
+        const profile =
+            findProfileObject(
+                data,
+                slug
+            );
+
+        if (
+            !profile ||
+            !Number.isFinite(
+                profile.total_xp
+            )
+        ) {
+            throw new Error(
+                'total_xp не найден'
+            );
+        }
+
+        return {
+            xp:
+                Number(
+                    profile.total_xp
+                ),
+
+            /*
+             * Если API когда-либо начнёт
+             * возвращать level прямо в объекте,
+             * используем его.
+             *
+             * Сейчас резерв — уровень,
+             * отображаемый на /user/...
+             */
+            level:
+                readLevelFromProfile(profile) ??
+                await readLevelFromCurrentSession() ??
+                readLevelFromPage(),
+
+            profile
+        };
+    }
+
+    // ---------------------------------------------------------
+    // Обновление
+    // ---------------------------------------------------------
+
+    async function refresh() {
+
+        if (busy) {
+            return;
+        }
+
+        busy = true;
+
+        dotEl.className =
+            'xpmon-dot loading';
+
+        statusEl.textContent =
+            'Запрос API…';
+
+        refreshButton
+            .classList
+            .add('loading');
+
+        try {
+
+            const result =
+                await fetchProfile();
+
+            const xp =
+                result.xp;
+
+            xpEl.textContent =
+                xp.toLocaleString(
+                    'ru-RU'
+                );
+
+            if (
+                Number.isFinite(
+                    result.level
+                )
+            ) {
+                levelEl.textContent =
+                    result.level
+                        .toLocaleString(
+                            'ru-RU'
+                        );
+            }
+
+            deltaEl.className =
+                'delta-value';
+
+            if (lastXP === null) {
+
+                deltaEl.textContent =
+                    '—';
+
+            } else {
+
+                const delta =
+                    xp - lastXP;
+
+                if (delta > 0) {
+
+                    deltaEl.textContent =
+                        '+' +
+                        delta.toLocaleString(
+                            'ru-RU'
+                        );
+
+                    deltaEl
+                        .classList
+                        .add('positive');
+
+                } else if (delta < 0) {
+
+                    deltaEl.textContent =
+                        delta.toLocaleString(
+                            'ru-RU'
+                        );
+
+                    deltaEl
+                        .classList
+                        .add('negative');
+
+                } else {
+
+                    deltaEl.textContent =
+                        '0';
+                }
+            }
+
+            lastXP = xp;
+
+            dotEl.className =
+                'xpmon-dot online';
+
+            statusEl.textContent =
+                `${getSlug()} · API`;
+
+            updatedEl.textContent =
+                'Обновлено: ' +
+                new Date()
+                    .toLocaleTimeString(
+                        'ru-RU'
+                    );
+
+        } catch (error) {
+            dotEl.className =
+                'xpmon-dot error';
+
+            statusEl.textContent =
+                error.message;
+
+        } finally {
+
+            busy = false;
+
+            refreshButton
+                .classList
+                .remove('loading');
+        }
+    }
+
+    // ---------------------------------------------------------
+    // Запуск
+    // ---------------------------------------------------------
+
+    refreshButton.addEventListener(
+        'click',
+        refresh
+    );
+
+    refresh();
+
+    const timer = setInterval(refresh, POLL_MS);
+
+    window.__ANIMEON_XP_MONITOR__ = {
+        running: true,
+        stop() {
+            clearInterval(timer);
+            try { panel.remove(); } catch {}
+            try { style.remove(); } catch {}
+            try { delete window.__ANIMEON_XP_MONITOR__; } catch {}
+        }
+    };
+
+    return { running: true, targetUser: TARGET_USER };
+
+})();
